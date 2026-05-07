@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# program-batch — wrap ch340bcfg.py with persistent serial-counter state.
+#
+# Each invocation:
+#   1. reads the next serial number from STATE_FILE (default 1)
+#   2. counts the chips currently plugged in
+#   3. runs ch340bcfg.py write --all with the right --serial-start
+#   4. on success, advances the counter by the number of chips programmed
+#   5. logs the run for audit
+#
+# Usage:
+#   ./program-batch                         # uses default product/template
+#   ./program-batch --product "Other Thing" --template "OTH{n:05d}"
+#   ./program-batch --dry-run               # plan only, counter not advanced
+#
+# Per-SKU counters: pass --state /path/to/this-sku.counter
+
+set -euo pipefail
+
+# -- defaults you'll want to edit ------------------------------------------
+PRODUCT="TubesZB-USB-C"
+TEMPLATE="TZB{n:05d}"
+STATE_FILE="${HOME}/.ch340b/tubeszb.counter"
+LOG_FILE="${HOME}/.ch340b/tubeszb.log"
+TOOL="$(dirname "$0")/ch340bcfg.py"
+DRY_RUN=0
+ASSUME_YES=1   # batch mode: don't prompt for each run; flip to 0 if you want prompts
+# --------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --product)  PRODUCT="$2";  shift 2 ;;
+        --template) TEMPLATE="$2"; shift 2 ;;
+        --state)    STATE_FILE="$2"; shift 2 ;;
+        --log)      LOG_FILE="$2"; shift 2 ;;
+        --tool)     TOOL="$2"; shift 2 ;;
+        --dry-run)  DRY_RUN=1; shift ;;
+        --interactive) ASSUME_YES=0; shift ;;
+        -h|--help)
+            sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+            exit 0
+            ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+done
+
+mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")"
+
+# Read counter (default 1 if no state file yet).
+if [[ -f "$STATE_FILE" ]]; then
+    NEXT=$(<"$STATE_FILE")
+else
+    NEXT=1
+fi
+[[ "$NEXT" =~ ^[0-9]+$ ]] || { echo "bad state file: $STATE_FILE contents=$NEXT" >&2; exit 1; }
+
+# Count chips currently attached. We use the tool's own list output to stay
+# consistent with what it'll see when programming — relying on lsusb |grep would
+# count differently if you ever add multi-chip USB hubs with their own IDs.
+COUNT=$(sudo "$TOOL" list 2>/dev/null \
+         | awk '/^Found / { print $2 }' || true)
+COUNT=${COUNT:-0}
+
+if [[ "$COUNT" -eq 0 ]]; then
+    echo "No CH340 devices attached. Plug some in and re-run." >&2
+    exit 1
+fi
+
+LAST=$((NEXT + COUNT - 1))
+echo "About to program $COUNT chip(s):"
+echo "  product:  $PRODUCT"
+echo "  serials:  ${TEMPLATE/\{n:*\}/$NEXT}..${TEMPLATE/\{n:*\}/$LAST}  (counter starts at $NEXT)"
+echo "  state:    $STATE_FILE"
+echo
+
+# Build the command. Quote per element so paths/strings with spaces survive.
+CMD=( sudo "$TOOL" write --all
+      --product "$PRODUCT"
+      --serial  "$TEMPLATE"
+      --serial-start "$NEXT" )
+if [[ $DRY_RUN -eq 1 ]]; then CMD+=( --dry-run ); fi
+if [[ $ASSUME_YES -eq 1 ]]; then CMD+=( --yes ); fi
+
+# Run and capture both stdout and exit status. Tee to console + log.
+TS=$(date -Iseconds)
+{
+    echo "=== $TS  start=$NEXT count=$COUNT  ${CMD[*]}"
+    "${CMD[@]}"
+    rc=$?
+    echo "=== $TS  rc=$rc"
+    exit $rc
+} 2>&1 | tee -a "$LOG_FILE"
+
+# tee swallows the exit code; recover it from PIPESTATUS.
+RC=${PIPESTATUS[0]}
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo
+    echo "Dry-run complete. Counter NOT advanced (still at $NEXT)."
+    exit 0
+fi
+
+if [[ $RC -ne 0 ]]; then
+    # The tool exits non-zero on ANY device failure. To advance only by the
+    # number that actually succeeded, parse the "Done: X/N succeeded." line
+    # from the log. If we can't find it (e.g. the tool died early), be safe
+    # and don't advance the counter at all.
+    SUCCEEDED=$(grep -oP '^Done: \K[0-9]+' "$LOG_FILE" | tail -1)
+    SUCCEEDED=${SUCCEEDED:-0}
+    if [[ "$SUCCEEDED" -gt 0 ]]; then
+        echo "$((NEXT + SUCCEEDED))" > "$STATE_FILE"
+        echo
+        echo "Partial success: $SUCCEEDED/$COUNT programmed. Counter advanced to $((NEXT + SUCCEEDED))."
+        echo "Inspect failures in $LOG_FILE before retrying."
+    else
+        echo
+        echo "No chips successfully programmed. Counter unchanged ($NEXT)."
+    fi
+    exit $RC
+fi
+
+# Full success: advance by COUNT.
+echo "$((NEXT + COUNT))" > "$STATE_FILE"
+echo
+echo "Programmed $COUNT chip(s). Counter advanced to $((NEXT + COUNT))."
