@@ -261,7 +261,7 @@ EEPROM layout:
 
 ## How this was developed
 
-This tool was developed iteratively in conversation with [Claude](https://claude.ai/), Anthropic's AI assistant. The interesting part is *how* — because the WCH protocol is undocumented, the development arc looked more like reverse engineering than coding.
+This tool was developed iteratively in conversation with AI. The interesting part is *how* — because the WCH protocol is undocumented, the development arc looked more like reverse engineering than coding.
 
 **Round 1: source inspection.** I provided the `.cs` source of the senthilnathant .NET tool. Claude initially read it as a serial-port protocol — `WriteFile`/`ReadFile` calls with a `0x40` magic prefix — and produced a pyserial-based first draft. That draft did not work.
 
@@ -269,14 +269,14 @@ This tool was developed iteratively in conversation with [Claude](https://claude
 
 **Round 3: probe and verify.** Claude added a `diag` subcommand that tried seven plausible variants of the read protocol (different bRequest values, different wValue/wIndex layouts, control-then-bulk patterns, and a try-after-init variant). All seven failed. This was useful negative information: it ruled out the entire family of "the .NET 4-byte buffer is the SETUP packet" theories.
 
-**Round 4: capture the wire.** I set up VirtualBox with USB passthrough, ran the official .NET tool inside Windows, and captured the actual USB traffic on the Linux host with `usbmon` and `tshark`. I uploaded the `.pcapng` file. Claude wrote a Python parser for the pcapng + Linux usbmon binary formats (no `tshark` was available in its sandbox) and decoded all 228 vendor control transfers from the capture. This revealed the real protocol immediately:
+**Round 4: capture the wire.** I set up VirtualBox with USB passthrough, ran the official CH340CFG.exe tool inside Windows, and captured the actual USB traffic on the Linux host with `usbmon` and `tshark`. I uploaded the `.pcapng` file. Claude wrote a Python parser for the pcapng + Linux usbmon binary formats (no `tshark` was available in its sandbox) and decoded all 228 vendor control transfers from the capture. This revealed the real protocol immediately:
 
 - The actual USB bRequest is `0x54`, not `0xA0`/`0xA1`.
 - The address is encoded in the high byte of `wValue`, not the low byte.
 - `wIndex` is a constant `0xA001` selecting the EEPROM function.
 - Every write is followed by a settle/commit pulse using bRequest `0x5E`.
 
-The .NET tool's 4-byte command buffer was indeed a private encoding inside the WCH Windows kernel driver, not a literal SETUP packet. Without the USB capture, this would have been very hard to figure out.
+CH340CFG.exe's 4-byte command buffer was indeed a private encoding inside the WCH Windows kernel driver, not a literal SETUP packet. Without the USB capture, this would have been very hard to figure out.
 
 **Round 5: features and ergonomics.** Once the protocol was solid, additional rounds added the `--all` multi-device flag, the `{n}` serial template substitution with `--serial-start`, and the `program-batch` wrapper for persistent counters across production runs.
 
