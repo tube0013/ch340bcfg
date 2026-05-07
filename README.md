@@ -1,6 +1,6 @@
 # ch340bcfg
 
-A Python command-line application for Linux to read and write the configuration EEPROM on WCH CH340B USB-to-UART chips. Supports setting the USB Vendor ID, Product ID, serial number, and product string — the same fields the official Windows `CH340BConfigure.exe` tool can program, but without needing Windows or Wine.
+A Python command-line application for Linux to read and write the configuration EEPROM on WCH CH340B USB-to-UART chips. Supports setting the USB Vendor ID, Product ID, serial number, and product string — the same fields the official Windows `CH340CFG.exe` tool can program, but without needing Windows or Wine.
 
 Includes a wrapper script (`program-batch`) for production use that maintains a persistent serial-number counter across runs, so you can program a tray of chips, plug in another tray, and pick up where you left off automatically.
 
@@ -81,13 +81,13 @@ Reading 2 device(s) ...
 [1/2] bus 1 address 33
   VID:            0x1A86
   PID:            0x7523
-  Serial number:  'TZB00101'
+  Serial number:  'TZB00001'
   Product string: 'TubesZB-USB-C'
 
 [2/2] bus 1 address 34
   VID:            0x1A86
   PID:            0x7523
-  Serial number:  'TZB00102'
+  Serial number:  'TZB00002'
   Product string: 'TubesZB-USB-C'
 ```
 
